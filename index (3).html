@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>جسيمات الحب — تحكم بالأصابع</title>
+<style>
+  :root{--bg:#030a16;--blue:#1eaaeb;--orange:#ff8014;--ink:#d8ecff;--dim:#6f8db0}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:var(--bg);color:var(--ink);font-family:"Segoe UI",Tahoma,"Noto Sans Arabic",sans-serif;overflow:hidden}
+  canvas#stage{position:fixed;inset:0;width:100%;height:100%;display:block}
+  #panel{display:none;position:fixed;top:18px;right:18px;width:300px;background:rgba(6,20,40,.72);border:1px solid rgba(30,170,235,.35);border-radius:14px;padding:14px 16px;backdrop-filter:blur(6px)}
+  #shapeName{font-size:22px;font-weight:600;margin-bottom:4px}
+  #status{font-size:13px;color:var(--dim);line-height:1.6;min-height:2.4em}
+  #chips{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin:12px 0}
+  #chips span{font-size:12px;text-align:center;padding:6px 0;border-radius:8px;border:1px solid rgba(30,170,235,.3);color:var(--dim);line-height:1.3}
+  #chips span b{display:block;font-size:16px;color:var(--ink)}
+  #chips span.on{background:linear-gradient(135deg,rgba(30,170,235,.45),rgba(255,128,20,.45));border-color:var(--orange);color:var(--ink)}
+  .row{display:flex;gap:8px;flex-wrap:wrap}
+  label.btn{font:inherit;font-size:13px;color:var(--ink);background:rgba(30,170,235,.15);border:1px solid rgba(30,170,235,.5);border-radius:8px;padding:7px 12px;cursor:pointer}
+  label.btn:hover{background:rgba(30,170,235,.3)}
+  label.btn:focus-within{outline:2px solid var(--orange);outline-offset:2px}
+  #files{position:absolute;opacity:0;width:1px;height:1px}
+  #keys{font-size:12px;color:var(--dim);margin-top:10px}
+  #cam{position:fixed;left:18px;bottom:18px;width:220px;aspect-ratio:4/3;border-radius:12px;overflow:hidden;border:1px solid rgba(30,170,235,.4);background:#000}
+  #cam video,#cam canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+  #panel.show{display:block}
+  #hint{position:fixed;left:0;right:0;top:calc(14px + env(safe-area-inset-top,0px));text-align:center;font-size:13px;color:var(--dim);pointer-events:none;padding:0 12px;display:none}
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<div id="hint"></div>
+
+<div id="panel">
+  <div id="shapeName">الكرة</div>
+  <div id="status">جارٍ تشغيل الكاميرا وتحميل نموذج تتبع اليد…</div>
+  <div id="chips"></div>
+  <div id="keys">بدون كاميرا: الأرقام 0–5 على لوحة المفاتيح، والأسهم لتحريك الكرة.</div>
+</div>
+<div id="cam"><video id="video" playsinline muted></video><canvas id="lm"></canvas></div>
+
+<script type="module">
+
+const IMAGES = [];
+const NAMES = ['الكرة','شعر','نثر','شعر','نثر','وعد'];
+// كل إصبع له نص. السطر الجديد يُكتب بـ \n
+const TEXTS = [null,
+  'إذا ذكر الهوى\nكان اسمك\nأول القصيدة\nيا داليا',
+  'اشتقت لك\nحتى صار الغياب\nأطول من الطريق\nيا داليا',
+  'عيناك يا داليا\nوطن لقلبي\nأقام فيه\nولا يريد الرحيل',
+  'أحبك جدا\nبقدر ما في الصمت\nمن كلام لا يقال\nيا داليا',
+  'وعدي لك يا داليا\nأن أبقى لك\nفي كل الأيام\nعاشقا وفيا'];
+const ICONS = ['✊','☝️','✌️','🤟','🖖','✋'];
+
+const cv=document.getElementById('stage'), ctx=cv.getContext('2d');
+const statusEl=document.getElementById('status'), nameEl=document.getElementById('shapeName');
+const chips=document.getElementById('chips');
+NAMES.forEach((n,i)=>{ const s=document.createElement('span'); s.innerHTML=`<b>${i}</b>${ICONS[i]}`; s.title=n; chips.appendChild(s); });
+
+const MOBILE=/Android|iPhone|iPad|Mobi/i.test(navigator.userAgent)||Math.min(innerWidth,innerHeight)<600;
+const WANT_GPU=!MOBILE||/[?&]gpu=1/.test(location.search);
+const N=MOBILE?3000:12000, rnd=Math.random, TAU=Math.PI*2;
+let NA=N, W,H,DPR, textCache={};
+function resize(){ DPR=Math.min(devicePixelRatio||1,MOBILE?1:1.5); W=innerWidth; H=innerHeight; cv.width=W*DPR; cv.height=H*DPR; ctx.setTransform(DPR,0,0,DPR,0,0); textCache={}; applyMode(); }
+addEventListener('resize',resize);
+
+// ---------- sphere (mode 0) ----------
+const golden=Math.PI*(3-Math.sqrt(5));
+const S=new Float32Array(N*3);
+for(let i=0;i<N;i++){ const y=1-(i/(N-1))*2, r=Math.sqrt(1-y*y), t=golden*i; S[i*3]=Math.cos(t)*r; S[i*3+1]=y; S[i*3+2]=Math.sin(t)*r; }
+// shuffle so any subset of particles (when quality auto-drops) still covers the whole sphere
+for(let i=N-1;i>0;i--){ const j=rnd()*(i+1)|0; for(let k=0;k<3;k++){ const t=S[i*3+k]; S[i*3+k]=S[j*3+k]; S[j*3+k]=t; } }
+
+const COLS=[];
+const P=[];
+for(let i=0;i<N;i++){ const o=rnd()<0.18;
+  P.push({x:innerWidth/2,y:innerHeight/2,s:1.5,a:0,r:o?255:30,g:o?128:170,b:o?20:235,
+    br:o?255:30,bg:o?128:170,bb:o?20:235,spd:0.13+rnd()*0.14,has:false,jit:0,tx:0,ty:0,tr:0,tg:0,tb:0,ps:2});
+}
+
+// assign target points to particles; extra particles re-use points with a small jitter
+function assign(pts, step, sizeK){
+  for(let i=pts.length-1;i>0;i--){ const j=rnd()*(i+1)|0; [pts[i],pts[j]]=[pts[j],pts[i]]; }
+  const L=pts.length;
+  P.forEach((p,i)=>{
+    if(i>=NA) return;
+    p.has=L>0; if(!L) return;
+    const t = i<L ? pts[i] : pts[rnd()*L|0];
+    p.jit = i<L ? 0 : step*0.9;
+    p.tx=t[0]; p.ty=t[1]; p.tr=t[2]; p.tg=t[3]; p.tb=t[4]; p.ps=step*sizeK;
+    p.ox=(rnd()-.5); p.oy=(rnd()-.5);
+  });
+}
+
+// ---------- text -> particles ----------
+function buildTextOnly(m){ buildText(m,true); }
+function buildText(m,onlyCache){
+  let c=textCache[m];
+  if(!c){
+    const lines=TEXTS[m].split('\n'), n=lines.length;
+    const oc=document.createElement('canvas'); oc.width=W; oc.height=H;
+    const g=oc.getContext('2d',{willReadFrequently:true});
+    g.direction='rtl'; g.textAlign='center'; g.textBaseline='middle';
+    const fam='"Noto Sans Arabic","Segoe UI",Tahoma,Arial,sans-serif';
+    let size=Math.min(W*0.32,H*0.5/n);
+    g.font=`700 ${size}px ${fam}`;
+    const mw=Math.max(...lines.map(l=>g.measureText(l).width)), maxW=W*0.84;
+    if(mw>maxW){ size*=maxW/mw; g.font=`700 ${size}px ${fam}`; }
+    const lh=size*1.3;
+    g.fillStyle='#fff';
+    lines.forEach((l,i)=>g.fillText(l,W/2,H/2+(i-(n-1)/2)*lh));
+    const step=Math.max(2.5,size/110);
+    const half=n*lh/2+size*0.2;
+    const y0=Math.max(0,(H/2-half)|0), hh=Math.min(H-y0,(half*2)|0);
+    const d=g.getImageData(0,y0,W,hh).data, pts=[];
+    let x0=1e9,x1=-1e9;
+    for(let y=0;y<hh;y+=step) for(let x=0;x<W;x+=step){
+      const k=((y|0)*W+(x|0))*4; if(d[k+3]<128) continue;
+      pts.push([x-W/2,y+y0-H/2,0,0,0]); if(x<x0)x0=x; if(x>x1)x1=x; }
+    // colour: blue -> orange gradient across the word, with some random mixing
+    for(const t of pts){
+      const u=Math.max(0,Math.min(1,((t[0]+W/2)-x0)/Math.max(1,x1-x0)+(rnd()-.5)*0.25));
+      t[2]=30+(255-30)*u; t[3]=170+(128-170)*u; t[4]=235+(20-235)*u;
+    }
+    c=textCache[m]={pts,step};
+  }
+  if(!onlyCache) assign(c.pts,c.step,1.0);
+}
+
+// ---------- image -> particles ----------
+const imgs=[]; let cur=null, idx=-1;
+const load=src=>new Promise(res=>{ const im=new Image(); im.onload=()=>res(im); im.src=src; });
+function buildImage(im){
+  const s=Math.min((W*0.9)/im.width,(H*0.92)/im.height), dw=im.width*s, dh=im.height*s;
+  const step=Math.max(2,Math.sqrt(dw*dh/(NA*0.9)));
+  const gw=Math.max(1,Math.floor(dw/step)), gh=Math.max(1,Math.floor(dh/step));
+  const oc=document.createElement('canvas'); oc.width=gw; oc.height=gh;
+  const ox=oc.getContext('2d',{willReadFrequently:true}); ox.imageSmoothingQuality='high'; ox.drawImage(im,0,0,gw,gh);
+  const d=ox.getImageData(0,0,gw,gh).data, pts=[];
+  for(let y=0;y<gh;y++) for(let x=0;x<gw;x++){ const k=(y*gw+x)*4; if(d[k+3]<120) continue;
+    pts.push([(x+.5)*step-dw/2,(y+.5)*step-dh/2,d[k],d[k+1],d[k+2]]); }
+  assign(pts,step,0.95);
+}
+function nextImage(){ idx=(idx+1)%imgs.length; cur=imgs[idx]; applyMode(); }
+function applyMode(){
+  if(mode===0) return;
+  buildText(mode);
+}
+
+// ---------- state ----------
+let mode=0, rot=0, handX=0.5, handY=0.5, offX=0, offY=0, lastSeen=0, kbX=0, kbY=0;
+function setMode(m){
+  if(m===mode) return;
+  mode=m; nameEl.textContent=NAMES[m];
+  applyMode();
+  [...chips.children].forEach((c,i)=>c.classList.toggle('on',i===m));
+}
+chips.children[0].classList.add('on');
+addEventListener('keydown',e=>{
+  if(e.key==='h'||e.key==='H'||e.key==='ا') document.getElementById('panel').classList.toggle('show');
+  if(/^[0-5]$/.test(e.key)) setMode(+e.key);
+  if(e.key==='ArrowLeft') kbX-=0.08; if(e.key==='ArrowRight') kbX+=0.08;
+  if(e.key==='ArrowUp') kbY-=0.08; if(e.key==='ArrowDown') kbY+=0.08;
+  kbX=Math.max(-.45,Math.min(.45,kbX)); kbY=Math.max(-.4,Math.min(.4,kbY));
+});
+const hintEl=document.getElementById('hint'), TOUCH=matchMedia('(pointer:coarse)').matches;
+new MutationObserver(()=>{ hintEl.textContent=statusEl.textContent; }).observe(statusEl,{childList:true,characterData:true,subtree:true});
+const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const MINNA=MOBILE?1800:3500;
+let fpsT=performance.now(), fpsN=0, lowCnt=0;
+function frame(){
+  const now=performance.now();
+  fpsN++; const fdt=now-fpsT;
+  if(fdt>1000){ const fps=fpsN*1000/fdt; fpsT=now; fpsN=0;
+    if(fdt>1600){ lowCnt=0; } else if(fps<42&&NA>MINNA){ if(++lowCnt>=2){ lowCnt=0; NA=Math.max(MINNA,(NA*0.75)|0); applyMode(); } } else lowCnt=0; }
+  const handOn = now-lastSeen<1200;
+  // text/sphere follow the hand; the photo stays centred
+  let tx=0, ty=0;
+  if(mode<9){ if(handOn){ tx=(handX-0.5)*1.25; ty=(handY-0.5)*0.9; } else { tx=kbX; ty=kbY; } }
+  tx=Math.max(-.42,Math.min(.42,tx)); ty=Math.max(-.36,Math.min(.36,ty));
+  offX+=(tx*W-offX)*0.12; offY+=(ty*H-offY)*0.12;
+  rot+= reduce?0.002:0.006;
+
+  ctx.globalAlpha=1; ctx.fillStyle='rgba(3,10,22,0.32)'; ctx.fillRect(0,0,W,H);
+  const CX=W/2+offX, CY=H/2+offY, R=Math.min(W,H)*0.27, f=900;
+  const cr=Math.cos(rot), sr=Math.sin(rot), tl=0.38, ct=Math.cos(tl), st=Math.sin(tl);
+  const t0=now*0.001;
+  let lastCS='', lastA=-1; ctx.globalAlpha=1;
+  for(let i=0;i<NA;i++){
+    const p=P[i]; let dx,dy,ds,da,r,g,b;
+    if(mode===0){
+      let x=S[i*3], y=S[i*3+1], z=S[i*3+2];
+      const x2=x*cr-z*sr; z=x*sr+z*cr; x=x2;
+      const y2=y*ct-z*st; z=y*st+z*ct; y=y2;
+      const br=1+Math.sin(t0*1.5+i*0.01)*0.012, sc=f/(f+z*R);
+      dx=CX+x*R*br*sc; dy=CY+y*R*br*sc; ds=1.7*sc; da=0.3+0.7*Math.max(0,Math.min(1,(1-z)/2));
+      r=p.br; g=p.bg; b=p.bb;
+    } else if(p.has){
+      dx=CX+p.tx; dy=CY+p.ty; ds=p.ps; da=1; r=p.tr; g=p.tg; b=p.tb;
+      if(p.jit){ dx+=p.ox*p.jit; dy+=p.oy*p.jit; }
+      { dx+=Math.sin(t0*2.2+i*0.37)*0.9; dy+=Math.cos(t0*1.9+i*0.53)*0.9; }
+    } else {
+      const ang=Math.atan2(p.y-H/2,p.x-W/2); dx=W/2+Math.cos(ang)*W; dy=H/2+Math.sin(ang)*H; ds=1; da=0; r=p.br; g=p.bg; b=p.bb;
+    }
+    const k=p.spd;
+    p.x+=(dx-p.x)*k; p.y+=(dy-p.y)*k; p.s+=(ds-p.s)*k; p.a+=(da-p.a)*k;
+    p.r+=(r-p.r)*k; p.g+=(g-p.g)*k; p.b+=(b-p.b)*k;
+    if(p.a<0.02) continue;
+    const ck=((p.r|0)>>3<<10)|((p.g|0)>>3<<5)|((p.b|0)>>3);
+    let cs=COLS[ck]; if(!cs) cs=COLS[ck]=`rgb(${(p.r|0)&248},${(p.g|0)&248},${(p.b|0)&248})`;
+    if(cs!==lastCS){ ctx.fillStyle=cs; lastCS=cs; }
+    const aq=Math.round(p.a*10)/10; if(aq!==lastA){ ctx.globalAlpha=aq; lastA=aq; }
+    ctx.fillRect(p.x-p.s/2,p.y-p.s/2,p.s,p.s);
+  }
+  requestAnimationFrame(frame);
+}
+
+// ---------- hand tracking ----------
+const video=document.getElementById('video'), lm=document.getElementById('lm'), lctx=lm.getContext('2d');
+let cand=-1, stable=0;
+function countFingers(L, aspect){
+  const d=(a,b)=>Math.hypot((L[a].x-L[b].x)*aspect, L[a].y-L[b].y);
+  let n=0;
+  for(const [tip,pip] of [[8,6],[12,10],[16,14],[20,18]]) if(d(tip,0)>d(pip,0)*1.1) n++;
+  const palm=d(0,9);
+  if(d(4,17)>d(2,17)*1.15 && d(4,5)>palm*0.45) n++;   // thumb out
+  return n;
+}
+async function startHands(){
+  try{
+    const {HandLandmarker,FilesetResolver}=await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs');
+    const fs=await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
+    statusEl.textContent='جارٍ تحميل نموذج تتبع اليد…';
+    const mkHL=del=>HandLandmarker.createFromOptions(fs,{baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',delegate:del},runningMode:'VIDEO',numHands:1});
+    let hl; try{ hl=await mkHL(WANT_GPU?'GPU':'CPU'); }catch(e){ console.warn('delegate fallback',e); hl=await mkHL('CPU'); }
+    const stream=await navigator.mediaDevices.getUserMedia({video:{width:320,height:240,facingMode:'user'}});
+    video.srcObject=stream; await video.play();
+    lm.width=video.videoWidth; lm.height=video.videoHeight;
+    statusEl.textContent='الكاميرا تعمل. ارفع يدك أمامها.';
+    const aspect=video.videoWidth/video.videoHeight;
+    let last=-1, lastDet=0;
+    const loop=()=>{
+      if(video.currentTime!==last && performance.now()-lastDet>(WANT_GPU?50:200)){ last=video.currentTime; lastDet=performance.now();
+        let res; try{ res=hl.detectForVideo(video,performance.now()); }catch(e){ statusEl.textContent='خطأ في التتبع: '+(e.message||e); requestAnimationFrame(loop); return; }
+        lctx.clearRect(0,0,lm.width,lm.height);
+        if(res.landmarks&&res.landmarks.length){
+          const L=res.landmarks[0]; lastSeen=performance.now();
+          const n=countFingers(L,aspect);
+          if(n===cand) stable++; else { cand=n; stable=0; }
+          if(stable>=(MOBILE?2:3)) setMode(n);
+          handX=1-L[9].x; handY=L[9].y;
+          lctx.fillStyle='#ff8014'; for(const q of L){ lctx.beginPath(); lctx.arc(q.x*lm.width,q.y*lm.height,4,0,7); lctx.fill(); }
+          statusEl.textContent = n===0 ? 'قبضة ✊ — حرّك يدك يميناً ويساراً لتحريك الكرة'
+                               : n===5 ? 'خمسة أصابع ✋ — '+NAMES[5] : `${n} ${n===1?'إصبع':n===2?'إصبعان':'أصابع'} — ${NAMES[n]}`;
+        } else if(performance.now()-lastSeen>1200){ statusEl.textContent='لا أرى يدك. ارفعها أمام الكاميرا.'; }
+      }
+      requestAnimationFrame(loop);
+    };
+    loop();
+  }catch(err){
+    console.error(err);
+    statusEl.textContent='تعذر تشغيل الكاميرا أو تتبع اليد ('+(err.name||err.message)+'). اسمح بالكاميرا، أو استخدم الأرقام 0–5 والأسهم';
+  }
+}
+
+function prewarm(){ for(let m=1;m<=4;m++) if(!textCache[m]) { const keep=mode; buildTextOnly(m); } }
+(async()=>{ for(const s of IMAGES) imgs.push(await load(s)); resize(); cur=imgs[0]; idx=0; frame(); setTimeout(prewarm,300); startHands(); })();
+</script>
+</body>
+</html>
