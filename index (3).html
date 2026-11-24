@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>جسيمات الحب — تحكم بالأصابع</title>
+<title>TOTA ♥ — تحكم بالأصابع</title>
 <style>
   :root{--bg:#030a16;--blue:#1eaaeb;--orange:#ff8014;--ink:#d8ecff;--dim:#6f8db0}
   *{box-sizing:border-box;margin:0;padding:0}
@@ -43,14 +43,10 @@
 <script type="module">
 
 const IMAGES = [];
-const NAMES = ['الكرة','شعر','نثر','شعر','نثر','وعد'];
-// كل إصبع له نص. السطر الجديد يُكتب بـ \n
-const TEXTS = [null,
-  'إذا ذكر الهوى\nكان اسمك\nأول القصيدة\nيا داليا',
-  'اشتقت لك\nحتى صار الغياب\nأطول من الطريق\nيا داليا',
-  'عيناك يا داليا\nوطن لقلبي\nأقام فيه\nولا يريد الرحيل',
-  'أحبك جدا\nبقدر ما في الصمت\nمن كلام لا يقال\nيا داليا',
-  'وعدي لك يا داليا\nأن أبقى لك\nفي كل الأيام\nعاشقا وفيا'];
+const NAMES = ['الكرة','T','O','T','A','TOTA ♥'];
+// كل إصبع له حرف. السطر الجديد يُكتب بـ \n — والسطر '♥' يُرسم قلباً
+const HEART='♥';
+const TEXTS = [null, 'T', 'O', 'T', 'A', 'TOTA\n♥'];
 const ICONS = ['✊','☝️','✌️','🤟','🖖','✋'];
 
 const cv=document.getElementById('stage'), ctx=cv.getContext('2d');
@@ -90,10 +86,18 @@ function assign(pts, step, sizeK){
     p.jit = i<L ? 0 : step*0.9;
     p.tx=t[0]; p.ty=t[1]; p.tr=t[2]; p.tg=t[3]; p.tb=t[4]; p.ps=step*sizeK;
     p.ox=(rnd()-.5); p.oy=(rnd()-.5);
+    p.hrt=!!t[5]; p.hcy=t[6]||0;
   });
 }
 
 // ---------- text -> particles ----------
+function drawHeart(g,cx,cy,s){
+  const k=s/34; g.beginPath();
+  for(let i=0;i<=120;i++){ const t=i/120*TAU, sn=Math.sin(t);
+    const x=16*sn*sn*sn, y=13*Math.cos(t)-5*Math.cos(2*t)-2*Math.cos(3*t)-Math.cos(4*t);
+    const px=cx+x*k, py=cy-y*k-k*1.5; i?g.lineTo(px,py):g.moveTo(px,py); }
+  g.closePath(); g.fill();
+}
 function buildTextOnly(m){ buildText(m,true); }
 function buildText(m,onlyCache){
   let c=textCache[m];
@@ -101,15 +105,17 @@ function buildText(m,onlyCache){
     const lines=TEXTS[m].split('\n'), n=lines.length;
     const oc=document.createElement('canvas'); oc.width=W; oc.height=H;
     const g=oc.getContext('2d',{willReadFrequently:true});
-    g.direction='rtl'; g.textAlign='center'; g.textBaseline='middle';
+    g.direction='ltr'; g.textAlign='center'; g.textBaseline='middle';
     const fam='"Noto Sans Arabic","Segoe UI",Tahoma,Arial,sans-serif';
     let size=Math.min(W*0.32,H*0.5/n);
     g.font=`700 ${size}px ${fam}`;
-    const mw=Math.max(...lines.map(l=>g.measureText(l).width)), maxW=W*0.84;
+    const mw=Math.max(...lines.map(l=>l===HEART?size:g.measureText(l).width)), maxW=W*0.84;
     if(mw>maxW){ size*=maxW/mw; g.font=`700 ${size}px ${fam}`; }
     const lh=size*1.3;
     g.fillStyle='#fff';
-    lines.forEach((l,i)=>g.fillText(l,W/2,H/2+(i-(n-1)/2)*lh));
+    let hY=null, hS=0;
+    lines.forEach((l,i)=>{ const y=H/2+(i-(n-1)/2)*lh;
+      if(l===HEART){ hY=y; hS=size*1.15; drawHeart(g,W/2,y,hS); } else g.fillText(l,W/2,y); });
     const step=Math.max(2.5,size/110);
     const half=n*lh/2+size*0.2;
     const y0=Math.max(0,(H/2-half)|0), hh=Math.min(H-y0,(half*2)|0);
@@ -122,6 +128,9 @@ function buildText(m,onlyCache){
     for(const t of pts){
       const u=Math.max(0,Math.min(1,((t[0]+W/2)-x0)/Math.max(1,x1-x0)+(rnd()-.5)*0.25));
       t[2]=30+(255-30)*u; t[3]=170+(128-170)*u; t[4]=235+(20-235)*u;
+      // heart particles: red/pink, flagged so they pulse
+      if(hY!==null && Math.abs(t[1]-(hY-H/2))<hS*0.6){
+        const m2=rnd(); t[2]=255; t[3]=30+60*m2; t[4]=70+50*m2; t[5]=1; t[6]=hY-H/2; }
     }
     c=textCache[m]={pts,step};
   }
@@ -199,6 +208,8 @@ function frame(){
       r=p.br; g=p.bg; b=p.bb;
     } else if(p.has){
       dx=CX+p.tx; dy=CY+p.ty; ds=p.ps; da=1; r=p.tr; g=p.tg; b=p.tb;
+      if(p.hrt){ const beat=1+0.09*Math.pow(Math.max(0,Math.sin(t0*5)),6);
+        dx=CX+p.tx*beat; dy=CY+p.hcy+(p.ty-p.hcy)*beat; }
       if(p.jit){ dx+=p.ox*p.jit; dy+=p.oy*p.jit; }
       { dx+=Math.sin(t0*2.2+i*0.37)*0.9; dy+=Math.cos(t0*1.9+i*0.53)*0.9; }
     } else {
@@ -265,7 +276,7 @@ async function startHands(){
   }
 }
 
-function prewarm(){ for(let m=1;m<=4;m++) if(!textCache[m]) { const keep=mode; buildTextOnly(m); } }
+function prewarm(){ for(let m=1;m<=5;m++) if(!textCache[m]) { const keep=mode; buildTextOnly(m); } }
 (async()=>{ for(const s of IMAGES) imgs.push(await load(s)); resize(); cur=imgs[0]; idx=0; frame(); setTimeout(prewarm,300); startHands(); })();
 </script>
 </body>
